@@ -1,0 +1,259 @@
+function generateReports() {
+  PropertiesService.getScriptProperties().setProperty('row', '');
+  PropertiesService.getScriptProperties().setProperty('count', 0);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getActiveSheet();
+  var ssId = ss.getId();
+  var users = ss.getViewers();
+
+  //var email = sheet.getRange("E1").getValue();
+  //if (email == "xxx@xxx.org") return;
+    
+  var timezone = ss.getSpreadsheetTimeZone();
+  
+  var today     = new Date();
+  var oneHourAgo = new Date(today.getTime() - 1 * 60 * 60 * 1000);  
+  var startTime = oneHourAgo.toISOString();
+  
+  var monitoredFolders = getMonitoredFolders();
+   for(var i = 0; i < monitoredFolders.length; i++) {
+     if(monitoredFolders[i].substring(0,5) == "mon__") {
+       // run the check on the folder
+       var folderName = monitoredFolders[i].substring(5);
+       var folders = DriveApp.getFoldersByName(folderName);
+       while (folders.hasNext()) {
+         var mainFolder = folders.next();
+         folderIteratorFunction(mainFolder, sheet, startTime, timezone, ssId);
+       }
+     }
+   }
+  var row = PropertiesService.getScriptProperties().getProperty('row');
+  var count = PropertiesService.getScriptProperties().getProperty('count');
+  if (row !== "") {
+    row = "<p>" + count + " file(s) have changed in your Google Drive in the last hour. Here's the list:</p><ol>" + row + "</ol>";
+    row +=  "<br><small>To stop these notifications, please <a href='" + ss.getUrl() + "'>click here</a> and choose <em>Uninstall</em> from the Drive Activity menu.</small>";
+    for(var i = 0; i < users.length; i++) {
+      var user = users[i];
+      var mail = user.getEmail();
+      if(validateEmail(mail)) {
+        MailApp.sendEmail(user.getEmail(), "Google Drive - File Activity Report", "", {htmlBody: row});
+      }
+    }
+  }
+}
+
+function folderIteratorFunction(folder, sheet, startTime, timezone, ssId) {
+  var row = PropertiesService.getScriptProperties().getProperty('row');
+  var count = PropertiesService.getScriptProperties().getProperty('count');
+  var folderId = folder.getId();
+  var search = '(trashed = true or trashed = false) and (modifiedDate > "' + startTime + '") and ("' + folderId + '" in parents)';
+  var files  = DriveApp.searchFiles(search);
+  while( files.hasNext() ) {
+    
+    var file = files.next();
+    
+    var fileName = file.getName();
+    var fileURL  = file.getUrl();
+    var fileId  = file.getId();
+    var lastUpdated =  Utilities.formatDate(file.getLastUpdated(), timezone, "dd-MM-yyyy HH:mm");
+    var dateCreated =  Utilities.formatDate(file.getDateCreated(), timezone, "dd-MM-yyyy HH:mm")
+    if(ssId != fileId) {
+      row += "<li>" + lastUpdated + " <a href='" + fileURL + "'>" + fileName + "</a></li>";
+      sheet.appendRow([dateCreated, lastUpdated, fileName, fileURL]);
+      
+      count++;
+    }
+  }
+  PropertiesService.getScriptProperties().setProperty('row', row);
+  PropertiesService.getScriptProperties().setProperty('count', count);
+  var childFolders = folder.getFolders();
+  while (childFolders.hasNext()) {
+    var childFolder = childFolders.next();
+    folderIteratorFunction(childFolder, sheet, startTime, timezone, ssId);
+  }
+}
+
+function onOpen() {  
+  var menu = [    
+    { name: "Step 1: Authorize",   functionName: "init"      },
+    {name: "Step 2: Select monitored folder", functionName: "configInterface"},
+    { name: "Step 3: Schedule Reports", functionName: "configure" },
+    null,
+    { name: "✖ Uninstall (Stop)",    functionName: "reset"     },
+    null
+  ];  
+  SpreadsheetApp.getActiveSpreadsheet()
+  .addMenu("➪ Drive Activity Report", menu);
+}
+
+function configure() {
+  
+  try {
+    
+    reset(true);
+    
+    var ss = SpreadsheetApp.getActive();
+    
+    //var email = ss.getRange("E1").getValue();
+    //if (email == "xxx@xxx.org") {
+    //  Browser.msgBox("Please put your email address in cell E1 where you wish to receive the hourly reports.");
+    //  return;
+    //}
+    
+    ScriptApp.newTrigger("generateReports").timeBased().everyMinutes(5).create();
+    
+    generateReports();
+    
+    ss.toast("The program is now running. You can close this sheet.", "Success", -1);
+    
+  } catch (e) {
+    Browser.msgBox(e.toString());
+  }
+  
+}
+
+function init() {  
+  
+  SpreadsheetApp.getActive().toast("The program is now initialized. Please run Step #2");
+  
+}
+
+function reset(e) {
+  
+  var triggers = ScriptApp.getProjectTriggers();
+  
+  for (var i = 0; i < triggers.length; i++) {
+    ScriptApp.deleteTrigger(triggers[i]);    
+  }
+  
+  if (!e) {
+    SpreadsheetApp.getActive().toast("The script is no longer active. You can re-initialize anytime later.", "Stopped", -1);
+  }
+  
+}
+
+function configInterface() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var app = UiApp.createApplication().setTitle('Select the main folder').setHeight(400).setWidth(800);
+  var addButton = app.createButton('Add ->').setWidth(120).setId("addButtonId");
+  var buttonsVerticalPanel = app.createVerticalPanel();
+  var mypanel = app.createVerticalPanel();
+  var myhpanel = app.createHorizontalPanel();
+  var triggerPanel = app.createHorizontalPanel();
+  var foldersList = app.createListBox(true).setId('foldersListId').setName('foldersList').setTitle('Drive Folders');
+  var selectedFoldersList = app.createListBox(true).setId('selectedFoldersListId').setName('selectedFoldersList').setTitle('Monitored Drive Folders');
+  
+  // setup buttons click handlers
+  addButton.addClickHandler(app.createServerHandler("addButtonClicked").addCallbackElement(myhpanel));
+  
+  // foldersList
+  foldersList.setHeight(380);
+  foldersList.setWidth(300);
+  
+  // selectedFoldersList
+  selectedFoldersList.setHeight(380);
+  selectedFoldersList.setWidth(300);
+  
+  // add buttons
+  buttonsVerticalPanel.add(addButton);
+    
+  // setup actions
+  updateMonitoredFoldersListbox(selectedFoldersList);
+  updateFoldersListbox(foldersList);
+  
+  // displace panels
+  myhpanel.add(foldersList);
+  myhpanel.add(buttonsVerticalPanel);
+  myhpanel.add(selectedFoldersList);
+  mypanel.add(myhpanel)
+  mypanel.add(triggerPanel);
+  app.add(mypanel);
+  ss.show(app);
+}
+
+/**
+ * Handle the click of Add button
+ * @param {Object} eventInfo event informations
+ */
+function addButtonClicked(eventInfo) {
+   var app = UiApp.getActiveApplication();
+   var value = eventInfo.parameter.foldersList;
+   var scriptProperties = PropertiesService.getScriptProperties();
+  
+   var monitoredFoldersListBox = app.getElementById("selectedFoldersListId")
+   // delete all monitored folders
+   var monitoredFolders = getMonitoredFolders();
+   for(var i = 0; i < monitoredFolders.length; i++) {
+     if(monitoredFolders[i].substring(0,5) == "mon__") {
+       scriptProperties.deleteProperty(monitoredFolders[i]);
+     }
+   }
+  
+  // If at least an item has been selected
+  // TODO: multiple selection
+  // multi select box returns a comma separated string
+  // var n = value.split(',');
+  if(value != "") {
+    addMonitoredFolder('mon__' + value);
+    updateMonitoredFoldersListbox(monitoredFoldersListBox);
+  }
+   //app.getElementById("addButtonId").setText(value);
+   return app;
+ }
+
+/**
+ * Update content of the monitored folders listbox
+ * @param {Listbox} monitoredFoldersListBox listbox of monitored folders
+ */
+function updateMonitoredFoldersListbox(monitoredFoldersListBox) {
+  // Get all monitored folders
+  var monitoredFolders = getMonitoredFolders();
+  // Clean the listbox
+  monitoredFoldersListBox.clear();
+  for(var i = 0; i < monitoredFolders.length; i++) {
+      // Check if the property is a folder to monitor
+    if(monitoredFolders[i].substring(0,5) == "mon__") {
+      monitoredFoldersListBox.addItem(monitoredFolders[i].substring(5));
+    }
+  }
+}
+
+/**
+ * Update content of the folders listbox
+ * @param {Listbox} FoldersListBox listbox of folders
+ */
+function updateFoldersListbox(FoldersListBox) {
+  var rootFolder = DriveApp.getRootFolder();
+  var driveFolders = rootFolder.getFolders();
+  while (driveFolders.hasNext()) {
+    var childFolder = driveFolders.next();
+    var folderName = childFolder.getName();
+    if(folderName == 'test notifiche') {
+      var pat = childFolder.getId();      
+    }
+    FoldersListBox.addItem(folderName);
+  }
+}
+
+/**
+ * Add a folder to the monitored folder list using scriptProperties
+ * @param {String} folderName name of the folder to monitor
+ */
+function addMonitoredFolder(folderName) {
+  var scriptProperties = PropertiesService.getScriptProperties();
+  scriptProperties.setProperty(folderName, "empty");
+}
+
+/**
+ * Get the list of monitored folders using scriptProperties
+ * @return {Array} monitored folders
+ */
+function getMonitoredFolders() {
+  var scriptProperties = PropertiesService.getScriptProperties();
+  return scriptProperties.getKeys();
+}
+
+function validateEmail(email) {
+  var re = /^([\w-]+(?:\.[\w-]+)*)@((?:[\w-]+\.)*\w[\w-]{0,66})\.([a-z]{2,6}(?:\.[a-z]{2})?)$/i;
+  return re.test(email);
+}
